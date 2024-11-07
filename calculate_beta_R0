@@ -1,0 +1,140 @@
+#Author: Hrishikesh Sivanandan
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.path import Path
+
+def calc_beta3(w_ND, X, Z, sc_min, sc_max,tool):
+    """calc_beta3 takes as input:
+            w_ND    - meshgrid of w values
+            X       - meshgrid of x coordinates
+            Z       - meshgrid of z coordinates
+            sc_min  - scaling value (tunable to identify minima blobs)
+            sc_max  - scaling value (tunable to identify maxima blobs)
+            tool    - WRF / SOWFA / LBoW 
+      output:
+          min(beta_all) - minimum beta_angle
+          np.mean(beta_all) - mean of all the values of beta calculated in all the blobs 
+          max(beta_all) - maximum of the beta_angles
+          x0_C - X location of all the blobs
+          z0_C - Z location of all the blobs
+      
+    """
+    sz = 1000 #sets the minimum number of points within a blob
+    Nx = X.shape[1] #sets the x limit of the arrays
+    col_ind_min = 0 #min. column index of w array (x value)
+    col_ind_max = Nx #max column index of w array (x value)
+    w_FOI = w_ND[:, col_ind_min:col_ind_max]
+    X3_FOI = X[:, col_ind_min:col_ind_max]
+    Z3_FOI = Z[:, col_ind_min:col_ind_max]
+    
+    plt.figure(figsize=(10, 2))
+    lvl = [sc_min * np.min(w_FOI), sc_max * np.max(w_FOI)]
+    w_ctr2 = plt.contour(X3_FOI, Z3_FOI, w_FOI, levels=lvl, cmap='viridis')
+    
+    x0_store = np.array([])
+    z0_store = np.array([])
+    x0_c = np.array([])
+    z0_c = np.array([])
+
+    for item in w_ctr2.collections:
+        for i in item.get_paths():
+            v = i.vertices
+            x0 = v[:, 0]
+            z0 = v[:, 1]
+
+            # Create a path for the contour and generate mask
+            contour_path = Path(v)
+            points = np.vstack((X3_FOI.ravel(), Z3_FOI.ravel())).T
+            mask = contour_path.contains_points(points).reshape(X3_FOI.shape)
+            
+            # Get w values and corresponding x, z within the contour
+            if np.any(mask):
+                w_values_inside = w_FOI[mask]
+                x_values_inside = X3_FOI[mask]
+                z_values_inside = Z3_FOI[mask]
+                if np.all(w_values_inside>0):
+                    # Find the maximum value and its location
+                    max_index = np.argmax(w_values_inside)
+                    max_x = x_values_inside[max_index]
+                    max_z = z_values_inside[max_index]
+
+                    if w_values_inside.size>sz:
+                        # Append the location of the maximum to x0_c and z0_c
+                        x0_c = np.hstack([x0_c, max_x])
+                        z0_c = np.hstack([z0_c, max_z])
+ 
+                if np.all(w_values_inside<0):
+                    # Find the maximum value and its location
+                    min_index = np.argmin(w_values_inside)
+                    min_x = x_values_inside[min_index]
+                    min_z = z_values_inside[min_index]
+
+                    if w_values_inside.size>sz:
+                        # Append the location of the maximum to x0_c and z0_c
+                        x0_c = np.hstack([x0_c, min_x])
+                        z0_c = np.hstack([z0_c, min_z]) 
+            
+            # Store all contour points if needed
+            x0_store = np.hstack([x0_store, x0])
+            z0_store = np.hstack([z0_store, z0])
+
+    # Proceed with beta calculation as before    
+    ZCXC = []
+    for j in range(len(x0_c)):
+        zx = (z0_c[j],x0_c[j])
+        ZCXC.append(zx)
+#     print('DEBUG:ZCXC=',ZCXC)
+    # Sort by x-values (first element of the tuple)
+    sorted_points = sorted(ZCXC)
+#     print('DEBUG:sorted_points',sorted_points)
+    #     print('DEBUG:X',X3_FOI[0,int(0.5*X3_FOI.shape[1])])
+#     print('DEBUG:Z_hilltop',Z3_FOI[0,int(0.5*X3_FOI.shape[1])])
+    th = 0.49995 #threshold value to see only downstream of the hill or obstacle
+    if tool == 'WRF': #terrain following grid coordinate system
+        threshold = X3_FOI[0,int(th*X3_FOI.shape[1])]  # Define your threshold value for x
+        hill_top = (Z3_FOI[0,int(th*X3_FOI.shape[1])],X3_FOI[0,int(th*X3_FOI.shape[1])])
+    else:
+        threshold = X3_FOI[0,int(th*X3_FOI.shape[1])]  # Define your threshold value for x 
+        hill_top = (Z3_FOI[0,int(th*X3_FOI.shape[1])],X3_FOI[0,int(th*X3_FOI.shape[1])])
+        
+#     print('DEBUG: threshold=',threshold)
+#     print('DEBUG: hill_top',hill_top)
+    downstream_points = [(z, x) for z, x in sorted_points if x >= threshold]
+
+#     print('DEBUG:downstream points',downstream_points)
+    # Unzip the filtered result
+    z_C, x_C = zip(*downstream_points) if downstream_points else ([], [])
+
+#     print("DEBUG:z_C:", z_C)
+#     print("DEBUG:type(z_C)",type(z_C))
+    z_C = list(z_C)
+#     print("DEBUG:x_C:", x_C)
+#     print('DEBUG:type(x_C)',type(x_C))
+    x_C = list(x_C)
+    
+    
+    beta_all = []
+    for i in range(len(z_C)):
+        dz = z_C[i]- hill_top[0]
+        dx = x_C[i] - hill_top[1]
+        beta = math.atan2(abs(dz), abs(dx))
+        beta_degrees = math.degrees(beta)
+        beta_all.append(beta_degrees)
+    z0_C = [0]+z_C
+#     print('DEBUG:x0_C',z0_C)
+    x0_C = [hill_top[1]]+x_C
+#     print('DEBUG:z0_C',x0_C)
+    
+    # Print beta range and average as before
+#     print(min(beta_all), '< β <', max(beta_all))
+#     print('β (average) = ', np.mean(beta_all))
+#     plt.plot(x0_C, z0_C,'--', color='red')#, label='Max (x, z) within Contours') #plots the location of maximas and minimas within the contour map
+    plt.legend()
+#     plt.show()
+    
+    
+    return [min(beta_all), np.mean(beta_all), max(beta_all), x0_C, z0_C]
+
+# Example call (using appropriate inputs for w_ND, X, Z, etc.)
+# BETA = calc_beta(w_ND, X, Z, 0.6, 1.2)
+
